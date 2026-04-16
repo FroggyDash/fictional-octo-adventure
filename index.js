@@ -3,17 +3,11 @@
 const {
     Client,
     GatewayIntentBits,
-    SlashCommandBuilder,
-    REST,
-    Routes,
-    PermissionsBitField,
-    EmbedBuilder,
+    PermissionsBitField
 } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = "1493989281956368538";
 
-// ===== CLIENT =====
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -22,76 +16,10 @@ const client = new Client({
     ],
 });
 
-// ===== COMMANDS =====
-const commands = [
-
-    // LOCK
-    new SlashCommandBuilder()
-        .setName('lock')
-        .setDescription('Lock the channel'),
-
-    // UNLOCK
-    new SlashCommandBuilder()
-        .setName('unlock')
-        .setDescription('Unlock the channel'),
-
-    // TIMEOUT
-    new SlashCommandBuilder()
-        .setName('timeout')
-        .setDescription('Timeout a user')
-        .addUserOption(o => o.setName('user').setRequired(true).setDescription('User'))
-        .addStringOption(o => o.setName('duration').setRequired(true).setDescription('10s, 10m, 1h, 1d')),
-
-    // KICK
-    new SlashCommandBuilder()
-        .setName('kick')
-        .setDescription('Kick a user')
-        .addUserOption(o => o.setName('user').setRequired(true).setDescription('User'))
-        .addStringOption(o => o.setName('reason').setDescription('Reason')),
-
-    // BAN
-    new SlashCommandBuilder()
-        .setName('ban')
-        .setDescription('Ban a user')
-        .addUserOption(o => o.setName('user').setRequired(true).setDescription('User'))
-        .addStringOption(o => o.setName('reason').setDescription('Reason')),
-
-    // UNBAN
-    new SlashCommandBuilder()
-        .setName('unban')
-        .setDescription('Unban a user')
-        .addStringOption(o => o.setName('userid').setRequired(true).setDescription('User ID')),
-
-    // CLEAR
-    new SlashCommandBuilder()
-        .setName('clear')
-        .setDescription('Delete messages')
-        .addIntegerOption(o => o.setName('amount').setRequired(true).setDescription('1-100')),
-
-];
-
-// ===== REGISTER GLOBAL =====
-const rest = new REST({ version: '10' }).setToken(TOKEN);
-
-(async () => {
-    try {
-        console.log("Registering global commands...");
-        await rest.put(
-            Routes.applicationCommands(CLIENT_ID),
-            { body: commands.map(c => c.toJSON()) }
-        );
-        console.log("✅ Global commands ready (can take up to 1 hour)");
-    } catch (err) {
-        console.error(err);
-    }
-})();
-
-// ===== READY =====
 client.once("ready", () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ===== HANDLER =====
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
@@ -103,7 +31,9 @@ client.on("interactionCreate", async (interaction) => {
         if (!member.permissions.has(PermissionsBitField.Flags.ManageChannels))
             return interaction.reply({ content: "❌ No permission", ephemeral: true });
 
-        await channel.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: false });
+        await channel.permissionOverwrites.edit(guild.roles.everyone, {
+            SendMessages: false
+        });
 
         return interaction.reply({ content: "🔒 Channel locked" });
     }
@@ -113,7 +43,9 @@ client.on("interactionCreate", async (interaction) => {
         if (!member.permissions.has(PermissionsBitField.Flags.ManageChannels))
             return interaction.reply({ content: "❌ No permission", ephemeral: true });
 
-        await channel.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: true });
+        await channel.permissionOverwrites.edit(guild.roles.everyone, {
+            SendMessages: true
+        });
 
         return interaction.reply({ content: "🔓 Channel unlocked" });
     }
@@ -190,7 +122,7 @@ client.on("interactionCreate", async (interaction) => {
             return interaction.reply({ content: "❌ 1-100 only", ephemeral: true });
 
         await channel.bulkDelete(amount, true);
-        return interaction.reply({ content: `🧹 Deleted ${amount} messages`, ephemeral: true });
+        return interaction.reply({ content: `🧹 Deleted ${amount}`, ephemeral: true });
     }
 });
 
@@ -210,5 +142,4 @@ function parseDuration(input) {
     }[unit];
 }
 
-// ===== LOGIN =====
 client.login(TOKEN);
