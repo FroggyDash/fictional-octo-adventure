@@ -7,6 +7,7 @@ const {
     REST,
     Routes,
     PermissionsBitField,
+    EmbedBuilder,
 } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_TOKEN; // Add your bot token here
@@ -88,7 +89,14 @@ client.on("interactionCreate", async (interaction) => {
             await channel.permissionOverwrites.edit(everyoneRole, {
                 [PermissionsBitField.Flags.SendMessages]: false, // Disable sending messages
             });
-            return interaction.reply({ content: "🔒 Channel locked successfully." });
+
+            const embed = new EmbedBuilder()
+                .setColor(0xff0000)
+                .setTitle("🔒 Channel Locked")
+                .setDescription(`This channel has been locked by ${interaction.user.tag}.`)
+                .setTimestamp();
+
+            return interaction.reply({ embeds: [embed] });
         } catch (error) {
             console.error(error);
             return interaction.reply({ content: `❌ Lock failed. ${error.message}`, ephemeral: true });
@@ -102,7 +110,14 @@ client.on("interactionCreate", async (interaction) => {
             await channel.permissionOverwrites.edit(everyoneRole, {
                 [PermissionsBitField.Flags.SendMessages]: null, // Reset to default permission
             });
-            return interaction.reply({ content: "🔓 Channel unlocked successfully." });
+
+            const embed = new EmbedBuilder()
+                .setColor(0x00ff00)
+                .setTitle("🔓 Channel Unlocked")
+                .setDescription(`This channel has been unlocked by ${interaction.user.tag}.`)
+                .setTimestamp();
+
+            return interaction.reply({ embeds: [embed] });
         } catch (error) {
             console.error(error);
             return interaction.reply({ content: `❌ Unlock failed. ${error.message}`, ephemeral: true });
@@ -121,23 +136,32 @@ client.on("interactionCreate", async (interaction) => {
         if (!ms) return interaction.reply({ content: "❌ Invalid duration format. Use '10m' or '1h'.", ephemeral: true });
 
         // Permission and hierarchy checks
-        const author = interaction.member; // Command issuer
         const bot = guild.members.cache.get(client.user.id); // Bot member
 
         if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
             return interaction.reply({ content: "❌ I need the 'MODERATE_MEMBERS' permission to timeout users.", ephemeral: true });
         }
 
-        if (member.roles.highest.position >= author.roles.highest.position) {
-            return interaction.reply({ content: "❌ You can't timeout this user (role hierarchy).", ephemeral: true });
+        if (member.roles.highest.position >= interaction.member.roles.highest.position) {
+            return interaction.reply({ content: "❌ You can't timeout this user due to role hierarchy.", ephemeral: true });
         }
         if (member.roles.highest.position >= bot.roles.highest.position) {
-            return interaction.reply({ content: "❌ I can't timeout this user (role hierarchy).", ephemeral: true });
+            return interaction.reply({ content: "❌ I can't timeout this user due to role hierarchy.", ephemeral: true });
         }
 
         try {
             await member.timeout(ms, `Timed out by ${interaction.user.tag}`);
-            return interaction.reply({ content: `✅ Timed out **${user.tag}** for ${duration}.` });
+            const embed = new EmbedBuilder()
+                .setColor(0xff0000)
+                .setTitle("⏱️ Member Timed Out")
+                .setDescription(`**${user.tag}** has been timed out for **${duration}**.`)
+                .addFields(
+                    { name: "Moderator", value: interaction.user.tag, inline: true },
+                    { name: "Duration", value: duration, inline: true }
+                )
+                .setTimestamp();
+
+            return interaction.reply({ embeds: [embed] });
         } catch (error) {
             console.error(error);
             return interaction.reply({ content: `❌ Timeout failed. Check role hierarchy or permissions.`, ephemeral: true });
@@ -153,26 +177,34 @@ client.on("interactionCreate", async (interaction) => {
         if (!member) return interaction.reply({ content: "❌ User not found.", ephemeral: true });
 
         // Permission and hierarchy checks
-        const author = interaction.member; // Command issuer
         const bot = guild.members.cache.get(client.user.id); // Bot member
-
         if (!guild.members.me.permissions.has(PermissionsBitField.Flags.KickMembers)) {
             return interaction.reply({ content: "❌ I need the 'KICK_MEMBERS' permission to kick users.", ephemeral: true });
         }
-
-        if (member.roles.highest.position >= author.roles.highest.position) {
-            return interaction.reply({ content: "❌ You can't kick this user (role hierarchy).", ephemeral: true });
+        if (member.roles.highest.position >= interaction.member.roles.highest.position) {
+            return interaction.reply({ content: "❌ You can't kick this user due to role hierarchy.", ephemeral: true });
         }
         if (member.roles.highest.position >= bot.roles.highest.position) {
-            return interaction.reply({ content: "❌ I can't kick this user (role hierarchy).", ephemeral: true });
+            return interaction.reply({ content: "❌ I can't kick this user due to role hierarchy.", ephemeral: true });
         }
 
         try {
             await member.kick(reason);
-            return interaction.reply({ content: `✅ Kicked **${user.tag}** successfully. Reason: ${reason}` });
+
+            const embed = new EmbedBuilder()
+                .setColor(0xff0000)
+                .setTitle("👢 Member Kicked")
+                .setDescription(`**${user.tag}** has been kicked from the server.`)
+                .addFields(
+                    { name: "Moderator", value: interaction.user.tag, inline: true },
+                    { name: "Reason", value: reason, inline: true }
+                )
+                .setTimestamp();
+
+            return interaction.reply({ embeds: [embed] });
         } catch (error) {
             console.error(error);
-            return interaction.reply({ content: `❌ Failed to kick user. ${error.message}`, ephemeral: true });
+            return interaction.reply({ content: `❌ Failed to kick user. Error: ${error.message}`, ephemeral: true });
         }
     }
 });
