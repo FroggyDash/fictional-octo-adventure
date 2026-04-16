@@ -1,60 +1,31 @@
 'use strict';
 
-const { REST, Routes, SlashCommandBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+const { REST, Routes } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = "1493989281956368538";
 
-// ===== COMMANDS =====
-const commands = [
+const commands = [];
+const commandsPath = path.join(__dirname, 'commands');
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
 
-    new SlashCommandBuilder().setName('lock').setDescription('Lock channel'),
-
-    new SlashCommandBuilder().setName('unlock').setDescription('Unlock channel'),
-
-    new SlashCommandBuilder()
-        .setName('timeout')
-        .setDescription('Timeout a user')
-        .addUserOption(o => o.setName('user').setRequired(true))
-        .addStringOption(o => o.setName('duration').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('kick')
-        .setDescription('Kick a user')
-        .addUserOption(o => o.setName('user').setRequired(true))
-        .addStringOption(o => o.setName('reason')),
-
-    new SlashCommandBuilder()
-        .setName('ban')
-        .setDescription('Ban a user')
-        .addUserOption(o => o.setName('user').setRequired(true))
-        .addStringOption(o => o.setName('reason')),
-
-    new SlashCommandBuilder()
-        .setName('unban')
-        .setDescription('Unban a user')
-        .addStringOption(o => o.setName('userid').setRequired(true)),
-
-    new SlashCommandBuilder()
-        .setName('clear')
-        .setDescription('Delete messages')
-        .addIntegerOption(o => o.setName('amount').setRequired(true)),
-
-];
+for (const file of commandFiles) {
+    const command = require(`./commands/${file}`);
+    commands.push(command.data.toJSON());
+}
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-// ===== DEPLOY =====
 (async () => {
     try {
         console.log("🚀 Deploying commands...");
-
         await rest.put(
             Routes.applicationCommands(CLIENT_ID),
-            { body: commands.map(c => c.toJSON()) }
+            { body: commands }
         );
-
-        console.log("✅ Commands deployed (wait up to 1 hour globally)");
+        console.log("✅ Commands deployed!");
     } catch (err) {
         console.error(err);
     }
