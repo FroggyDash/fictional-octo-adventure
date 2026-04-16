@@ -16,13 +16,15 @@ const client = new Client({
 
 client.commands = new Collection();
 
-// LOAD COMMANDS
-const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+// LOAD COMMAND FILES FROM SAME FOLDER
+const commandFiles = fs.readdirSync(__dirname)
+    .filter(file => file.endsWith('.js') && file !== 'index.js' && file !== 'deploy-commands.js');
 
 for (const file of commandFiles) {
-    const command = require(`./commands/${file}`);
-    client.commands.set(command.data.name, command);
+    const command = require(`./${file}`);
+    if (command.data && command.execute) {
+        client.commands.set(command.data.name, command);
+    }
 }
 
 // READY (FIXED)
@@ -42,7 +44,7 @@ client.on("interactionCreate", async (interaction) => {
     } catch (error) {
         console.error(error);
         await interaction.reply({
-            content: "❌ Error executing command.",
+            content: "❌ Error executing command",
             ephemeral: true
         });
     }
