@@ -1,349 +1,332 @@
+  // index.js (Discord.js v15) - Moderation bot with clientReady fix
 
+require("dotenv").config();
 const {
   Client,
   GatewayIntentBits,
-  SlashCommandBuilder,
-  REST,
-  Routes,
-  PermissionsBitField
-} = require('discord.js');
+  Partials,
+  PermissionsBitField,
+  ChannelType,
+} = require("discord.js");
 
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-
-// ===== KEEP ALIVE SERVER (FIXES RENDER ERROR) =====
-const app = express();
-app.get("/", (req, res) => res.send("Bot is alive"));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
-
-// ===== CONFIG =====
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = "1493989281956368538"; // your app ID
-
-// ===== SIMPLE WARNING STORAGE (JSON) =====
-const WARN_FILE = path.join(__dirname, "warnings.json");
-function loadWarnings() {
-  try {
-    if (!fs.existsSync(WARN_FILE)) return {};
-    return JSON.parse(fs.readFileSync(WARN_FILE, "utf8") || "{}");
-  } catch {
-    return {};
-  }
-}
-function saveWarnings(data) {
-  fs.writeFileSync(WARN_FILE, JSON.stringify(data, null, 2));
-}
-const warnings = loadWarnings();
-
-// ===== CLIENT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, // needed for purge
-    GatewayIntentBits.GuildMembers
-  ]
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildModeration, // timeouts etc.
+    GatewayIntentBits.GuildPresences,
+    GatewayIntentBits.GuildMessageReactions,
+  ],
+  partials: [Partials.Channel],
 });
 
-// ===== SLASH COMMANDS =====
-const commands = [
-  new SlashCommandBuilder()
-    .setName('ping')
-    .setDescription('Check if bot is alive'),
+// -------------------- Config --------------------
+const PREFIX = "!"; // change if you want
 
-  // existing ban/unban
-  new SlashCommandBuilder()
-    .setName('ban')
-    .setDescription('Ban a user')
-    .addUserOption(option =>
-      option.setName('user')
-        .setDescription('User to ban')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('reason')
-        .setDescription('Reason for ban')
-        .setRequired(false)
-    ),
+// Simple in-memory warn store (resets when bot restarts).
+// If you want persistence, tell me and I’ll add a JSON file or database.
+const warns = new Map(); // key: `${guildId}_${userId}` => number
+const warnLog = new Map(); // key: `${guildId}_${userId}` => array of warn entries
 
-  new SlashCommandBuilder()
-    .setName('unban')
-    .setDescription('Unban a user')
-    .addStringOption(option =>
-      option.setName('id')
-        .setDescription('User ID to unban')
-        .setRequired(true)
-    ),
+function warnKey(guildId, userId) {
+  return `${guildId}_${userId}`;
+}
 
-  // ===== NEW: warn =====
-  new SlashCommandBuilder()
-    .setName('warn')
-    .setDescription('Warn a user')
-    .addUserOption(option =>
-      option.setName('user')
-        .setDescription('User to warn')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('reason')
-        .setDescription('Reason for warning')
-        .setRequired(false)
-    ),
+function getWarnCount(guildId, userId) {
+  return warns.get(warnKey(guildId, userId)) || 0;
+}
 
-  // ===== NEW: kick =====
-  new SlashCommandBuilder()
-    .setName('kick')
-    .setDescription('Kick a user')
-    .addUserOption(option =>
-      option.setName('user')
-        .setDescription('User to kick')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('reason')
-        .setDescription('Reason for kick')
-        .setRequired(false)
-    ),
+function addWarn(guildId, userId) {
+  const k = warnKey(guildId, userId);
+  const next = getWarnCount(guildId, userId) + 1;
+  warns.set(k, next);
+  return next;
+}
 
-  // ===== NEW: purge =====
-  new SlashCommandBuilder()
-    .setName('purge')
-    .setDescription('Delete messages in this channel')
-    .addIntegerOption(option =>
-      option.setName('amount')
-        .setDescription('How many messages to delete (1-100)')
-        .setRequired(true)
-        .setMinValue(1)
-        .setMaxValue(100)
-    )
-];
+function parseDurationToMs(input) {
+  // Accepts: 10s, 5m, 1h, 2d
+  // Also accepts plain number as seconds: "30" => 30s
+  const str = String(input).trim().toLowerCase();
 
-const commandsJson = commands.map(cmd => cmd.toJSON());
+  const m = str.match(/^(\d+)(s|m|h|d)?$/);
+  if (!m) return null;
 
-// ===== REGISTER COMMANDS =====
-const rest = new REST({ version: '10' }).setToken(TOKEN);
+  const amount = Number(m[1]);
+  const unit = m[2] || "s";
 
-(async () => {
-  try {
-    console.log("Registering slash commands...");
-    await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
-      { body: commandsJson }
-    );
-    console.log("Slash commands registered!");
-  } catch (error) {
-    console.error(error);
-  }
-})();
+  const multipliers = {
+    s: 1000,
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+  };
 
-// ===== READY =====
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  return amount * multipliers[unit];
+}
+
+// -------------------- clientReady fix --------------------
+client.once("clientReady", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ===== HELPERS =====
-function getMemberFromInteraction(interaction, user) {
-  // interaction.options.getUser() returns a User, but we want GuildMember to kick/ban
-  return interaction.guild.members.cache.get(user.id) || null;
+// -------------------- Helpers --------------------
+function hasModPerm(member) {
+  return member.permissions.has(PermissionsBitField.Flags.ModerateMembers);
 }
 
-async function enforceHierarchy({ interaction, targetMember }) {
-  const author = interaction.member;
-  const botMember = await interaction.guild.members.fetchMe();
-
-  // If you can’t fetch members, this can throw; we handle it elsewhere.
-  if (!author.roles?.highest || !targetMember.roles?.highest || !botMember.roles?.highest) {
-    return { ok: false, msg: "Role hierarchy check failed." };
-  }
-
-  if (targetMember.id === interaction.client.user.id) {
-    return { ok: false, msg: "I can’t moderate myself." };
-  }
-
-  if (targetMember.roles.highest.position >= author.roles.highest.position) {
-    return { ok: false, msg: "You can’t moderate that member (role hierarchy)." };
-  }
-
-  if (targetMember.roles.highest.position >= botMember.roles.highest.position) {
-    return { ok: false, msg: "I can’t moderate that member (role hierarchy)." };
-  }
-
-  return { ok: true };
+function replyEphemeralLike(message, text) {
+  // In text chats we can't do ephemeral; just keep it short.
+  return message.reply(text).catch(() => {});
 }
 
-// ===== HANDLE COMMANDS =====
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+async function canActOn(member, target) {
+  // Basic role hierarchy check (bot must be able to moderate target)
+  // Note: Discord enforces this server-side too.
+  if (!target) return false;
 
-  const { guild } = interaction;
-  if (!guild) return interaction.reply({ content: "Use this command in a server.", ephemeral: true });
+  // Bot higher than target
+  const botHighest = message.guild.members.me.roles.highest;
+  const targetHighest = target.roles.highest;
+  return botHighest.comparePositionTo(targetHighest) > 0;
+}
 
-  // PING
-  if (interaction.commandName === "ping") {
-    return interaction.reply({ content: "🏓 Pong!", ephemeral: true });
+// -------------------- Message Command Handler --------------------
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (!message.guild) return; // ignore DMs
+  if (!message.content.startsWith(PREFIX)) return;
+
+  const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
+  const command = args.shift()?.toLowerCase();
+
+  const modMember = message.member;
+
+  // If command requires moderation permissions, check it:
+  const requiresMod = [
+    "kick",
+    "ban",
+    "timeout",
+    "untimeout",
+    "warn",
+    "clearwarns",
+    "purge",
+    "delete",
+    "lock",
+    "unlock",
+    "mute", // alias timeout
+    "unmute", // alias untimeout
+  ];
+
+  if (requiresMod.includes(command) && !hasModPerm(modMember)) {
+    return replyEphemeralLike(message, "❌ You need **Moderate Members** permission to use this.");
   }
 
-  // BAN
-  if (interaction.commandName === "ban") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.BanMembers)) {
-      return interaction.reply({ content: "❌ No permission (BanMembers).", ephemeral: true });
-    }
+  // -------------------- KICK --------------------
+  if (command === "kick") {
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
+    const reason = args.slice(1).join(" ") || "No reason provided";
 
-    const user = interaction.options.getUser("user", true);
-    const reason = interaction.options.getString("reason") || "No reason provided";
+    if (!member) return replyEphemeralLike(message, "Usage: `!kick @user [reason]`");
+    if (!member.kickable) return replyEphemeralLike(message, "❌ I can’t kick that user (permissions/role).");
+
+    // Try hierarchy quickly
+    try {
+      if (!message.guild.members.me.roles.highest || message.guild.members.me.roles.highest.comparePositionTo(member.roles.highest) <= 0) {
+        return replyEphemeralLike(message, "❌ My role must be higher than that user’s role.");
+      }
+    } catch {}
 
     try {
-      const member = await guild.members.fetch(user.id).catch(() => null);
-      if (member) {
-        const author = interaction.member;
-        const botMember = await guild.members.fetchMe();
-        if (member.roles.highest.position >= botMember.roles.highest.position) {
-          return interaction.reply({ content: "❌ I can’t ban that user (role hierarchy).", ephemeral: true });
-        }
-        if (member.roles.highest.position >= author.roles.highest.position) {
-          return interaction.reply({ content: "❌ You can’t ban that user (role hierarchy).", ephemeral: true });
-        }
+      await member.kick(reason);
+      return message.reply(`✅ Kicked **${member.user.tag}**. Reason: ${reason}`);
+    } catch (e) {
+      return message.reply(`❌ Kick failed: ${e?.message || e}`);
+    }
+  }
+
+  // -------------------- BAN --------------------
+  if (command === "ban") {
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
+    const reason = args.slice(1).join(" ") || "No reason provided";
+
+    if (!member) return replyEphemeralLike(message, "Usage: `!ban @user [reason]`");
+    if (!member.bannable) return replyEphemeralLike(message, "❌ I can’t ban that user (permissions/role).");
+
+    try {
+      if (!message.guild.members.me.roles.highest || message.guild.members.me.roles.highest.comparePositionTo(member.roles.highest) <= 0) {
+        return replyEphemeralLike(message, "❌ My role must be higher than that user’s role.");
+      }
+    } catch {}
+
+    try {
+      await member.ban({ reason });
+      return message.reply(`✅ Banned **${member.user.tag}**. Reason: ${reason}`);
+    } catch (e) {
+      return message.reply(`❌ Ban failed: ${e?.message || e}`);
+    }
+  }
+
+  // -------------------- TIMEOUT (mute) --------------------
+  if (command === "timeout" || command === "mute") {
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
+    const durationInput = args[1]; // e.g. 10m
+    const reason = args.slice(2).join(" ") || "No reason provided";
+
+    if (!member || !durationInput) {
+      return replyEphemeralLike(message, "Usage: `!timeout @user <duration> [reason]` (e.g. `!timeout @Bob 10m spamming`)");
+    }
+
+    const ms = parseDurationToMs(durationInput);
+    if (!ms || ms <= 0) return replyEphemeralLike(message, "❌ Invalid duration. Use like `10s`, `5m`, `1h`, `2d`.");
+
+    // Discord timeout max is 28 days
+    const maxMs = 28 * 24 * 60 * 60 * 1000;
+    const finalMs = Math.min(ms, maxMs);
+
+    try {
+      if (!member.moderatable) {
+        return replyEphemeralLike(message, "❌ I can’t timeout that user (permissions/role).");
       }
 
-      await guild.members.ban(user.id, { reason });
-      return interaction.reply({ content: `✅ Banned **${user.tag}**.`, ephemeral: true });
-    } catch {
-      return interaction.reply({ content: "❌ Failed to ban user. Check permissions/role hierarchy.", ephemeral: true });
+      await member.timeout(finalMs, reason);
+      return message.reply(`✅ Timed out **${member.user.tag}** for **${durationInput}**. Reason: ${reason}`);
+    } catch (e) {
+      return message.reply(`❌ Timeout failed: ${e?.message || e}`);
     }
   }
 
-  // UNBAN
-  if (interaction.commandName === "unban") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.BanMembers)) {
-      return interaction.reply({ content: "❌ No permission (BanMembers).", ephemeral: true });
-    }
+  // -------------------- UNTIMEOUT (unmute) --------------------
+  if (command === "untimeout" || command === "unmute") {
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
+    const reason = args.slice(1).join(" ") || "No reason provided";
 
-    const id = interaction.options.getString("id", true);
+    if (!member) return replyEphemeralLike(message, "Usage: `!untimeout @user [reason]`");
 
     try {
-      await guild.members.unban(id);
-      return interaction.reply({ content: `✅ Unbanned user with ID \`${id}\`.`, ephemeral: true });
-    } catch {
-      return interaction.reply({ content: "❌ Invalid ID or user not banned.", ephemeral: true });
+      if (!member.moderatable) {
+        return replyEphemeralLike(message, "❌ I can’t modify that user (permissions/role).");
+      }
+
+      await member.timeout(0, reason);
+      return message.reply(`✅ Removed timeout from **${member.user.tag}**. Reason: ${reason}`);
+    } catch (e) {
+      return message.reply(`❌ Untimeout failed: ${e?.message || e}`);
     }
   }
 
-  // WARN
-  if (interaction.commandName === "warn") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ModerateMembers)) {
-      return interaction.reply({ content: "❌ No permission (ModerateMembers).", ephemeral: true });
-    }
+  // -------------------- WARN --------------------
+  if (command === "warn") {
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
+    const reason = args.slice(1).join(" ") || "No reason provided";
 
-    const user = interaction.options.getUser("user", true);
-    const reason = interaction.options.getString("reason") || "No reason provided";
+    if (!member) return replyEphemeralLike(message, "Usage: `!warn @user [reason]`");
 
-    const member = await guild.members.fetch(user.id).catch(() => null);
-    if (!member) return interaction.reply({ content: "❌ Could not find that member in this server.", ephemeral: true });
+    const count = addWarn(message.guild.id, member.id);
 
-    // Hierarchy check (optional for warn, but good practice)
-    const hierarchy = await enforceHierarchy({ interaction, targetMember: member });
-    if (!hierarchy.ok) return interaction.reply({ content: `❌ ${hierarchy.msg}`, ephemeral: true });
+    const k = warnKey(message.guild.id, member.id);
+    if (!warnLog.has(k)) warnLog.set(k, []);
+    warnLog.get(k).push({ by: message.author.id, reason, at: Date.now() });
 
-    const current = warnings[user.id] || { count: 0, items: [] };
-    const next = {
-      count: (current.count || 0) + 1,
-      items: [
-        ...(current.items || []),
-        {
-          at: Date.now(),
-          by: interaction.user.id,
-          reason
-        }
-      ]
-    };
+    // (Optional) DM the user
+    member
+      .send(`You received a warning in **${message.guild.name}**.\nReason: ${reason}\nTotal warnings: ${count}`)
+      .catch(() => {});
 
-    warnings[user.id] = next;
-    saveWarnings(warnings);
-
-    return interaction.reply({
-      content: `⚠️ Warned **${user.tag}** (Total warns: ${next.count}).\nReason: ${reason}`,
-      ephemeral: true
-    });
+    return message.reply(`⚠️ Warned **${member.user.tag}**. Total warnings: **${count}**. Reason: ${reason}`);
   }
 
-  // KICK
-  if (interaction.commandName === "kick") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.KickMembers)) {
-      return interaction.reply({ content: "❌ No permission (KickMembers).", ephemeral: true });
-    }
+  // -------------------- CLEAR WARNS --------------------
+  if (command === "clearwarns") {
+    const member = message.mentions.members.first() || message.guild.members.cache.get(args[0]);
 
-    const user = interaction.options.getUser("user", true);
-    const reason = interaction.options.getString("reason") || "No reason provided";
+    if (!member) return replyEphemeralLike(message, "Usage: `!clearwarns @user`");
 
-    const targetMember = await guild.members.fetch(user.id).catch(() => null);
-    if (!targetMember) return interaction.reply({ content: "❌ Could not find that member.", ephemeral: true });
+    warns.delete(warnKey(message.guild.id, member.id));
+    warnLog.delete(warnKey(message.guild.id, member.id));
 
-    const hierarchy = await enforceHierarchy({ interaction, targetMember });
-    if (!hierarchy.ok) return interaction.reply({ content: `❌ ${hierarchy.msg}`, ephemeral: true });
-
-    try {
-      await targetMember.kick(reason);
-      return interaction.reply({ content: `✅ Kicked **${user.tag}**.\nReason: ${reason}`, ephemeral: true });
-    } catch {
-      return interaction.reply({ content: "❌ Failed to kick. Check permissions/role hierarchy.", ephemeral: true });
-    }
+    return message.reply(`🧹 Cleared warnings for **${member.user.tag}**.`);
   }
 
-  // PURGE
-  if (interaction.commandName === "purge") {
-    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages)) {
-      return interaction.reply({ content: "❌ No permission (ManageMessages).", ephemeral: true });
-    }
+  // -------------------- PURGE (delete multiple) --------------------
+  if (command === "purge") {
+    const amount = Number(args[0]);
 
-    const amount = interaction.options.getInteger("amount", true);
-    const channel = interaction.channel;
-
-    // bot permission check
-    const botMember = await guild.members.fetchMe();
-    if (!botMember.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
-      return interaction.reply({ content: "❌ I don’t have ManageMessages in this channel.", ephemeral: true });
+    if (!amount || !Number.isFinite(amount) || amount < 1 || amount > 100) {
+      return replyEphemeralLike(message, "Usage: `!purge <1-100>`");
     }
 
     try {
-      // Fetch recent messages then bulk delete (filters out old messages with "true")
-      const messages = await channel.messages.fetch({ limit: amount });
-      const deleted = await channel.bulkDelete(messages, true);
-
-      return interaction.reply({ content: `🧹 Deleted **${deleted.size}** message(s).`, ephemeral: true });
-    } catch (err) {
-      return interaction.reply({ content: "❌ Purge failed. Check bot permissions and message age limits.", ephemeral: true });
+      const deleted = await message.channel.bulkDelete(amount, true);
+      return message.reply(`🗑️ Purged **${deleted.size}** messages.`).then((m) => setTimeout(() => m.delete().catch(() => {}), 3000));
+    } catch (e) {
+      return message.reply(`❌ Purge failed: ${e?.message || e}`);
     }
+  }
+
+  // -------------------- DELETE (delete a single message by ID or mention) --------------------
+  if (command === "delete") {
+    // expects message mention or message id
+    const targetMsg = message.mentions.messages?.first();
+
+    const msgId = args[0];
+    if (!targetMsg && !msgId) return replyEphemeralLike(message, "Usage: `!delete @message` or `!delete <messageId>`");
+
+    try {
+      const toDelete = targetMsg
+        ? targetMsg
+        : await message.channel.messages.fetch(msgId);
+
+      if (!toDelete) return replyEphemeralLike(message, "Could not find that message.");
+      await toDelete.delete();
+      return message.reply("✅ Deleted.");
+    } catch (e) {
+      return message.reply(`❌ Delete failed: ${e?.message || e}`);
+    }
+  }
+
+  // -------------------- LOCK / UNLOCK --------------------
+  if (command === "lock" || command === "unlock") {
+    // Only supports text channels
+    const channel = message.channel;
+    if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) {
+      return replyEphemeralLike(message, "❌ This command only works in text/news channels.");
+    }
+
+    const everyone = message.guild.roles.everyone;
+
+    const lock = command === "lock";
+    try {
+      await channel.permissionOverwrites.edit(everyone.id, {
+        SendMessages: !lock,
+        AddReactions: !lock,
+      });
+
+      return message.reply(lock ? "🔒 Channel locked." : "🔓 Channel unlocked.");
+    } catch (e) {
+      return message.reply(`❌ Failed: ${e?.message || e}`);
+    }
+  }
+
+  // -------------------- MISC --------------------
+  if (command === "help") {
+    return message.reply(
+      [
+        "🛡️ Moderation commands:",
+        "`!kick @user [reason]`",
+        "`!ban @user [reason]`",
+        "`!timeout @user <10s|5m|1h|2d> [reason]`  (alias: !mute)",
+        "`!untimeout @user [reason]` (alias: !unmute)",
+        "`!warn @user [reason]`",
+        "`!clearwarns @user`",
+        "`!purge <1-100>`",
+        "`!delete @message` or `!delete <messageId>`",
+        "`!lock` / `!unlock` (current channel)",
+      ].join("\n")
+    );
   }
 });
 
-// ===== LOGIN =====
-client.login(TOKEN);
-```
-
----
-
-## 3) Render / Discord settings you MUST do
-1) In the **Discord Developer Portal**, enable the bot’s **Privileged Gateway Intent** only if needed (for intents used above):
-   - You may need `Message Content Intent` enabled in Discord settings for purge to work reliably.
-
-2) Invite URL permissions must include:
-   - `Ban Members`
-   - `Kick Members`
-   - `Manage Messages`
-   - `Moderate Members` (for warn)
-   - `Use Application Commands` (always)
-
-If your bot still fails, it’s almost always **permissions** or **role hierarchy**.
-
----
-
-## Quick question (so I can add the “other mod commands” next)
-Do you want these additional commands too?
-
-- **/timeout** (mute for X minutes) ✅ very common
-- **/ban** and **/unban** (you already started with ban/unban)
-- **/lock** and **/unlock** (channel permissions)
-
-Reply with: `timeout` / `lock` / `unlock` / `all`, and also tell me how you want timeout duration input (minutes vs seconds vs string like “10m”).
+// -------------------- Login --------------------
+client.login(process.env.DISCORD_TOKEN);
