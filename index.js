@@ -8,51 +8,22 @@ const {
     Routes,
     PermissionsBitField,
 } = require('discord.js');
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
 
-// ===== KEEP ALIVE SERVER =====
-const app = express();
-app.get("/", (req, res) => res.send("Bot is alive"));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
+const TOKEN = process.env.DISCORD_TOKEN; // Add your bot token here
+const CLIENT_ID = "1493989281956368538"; // Replace with your bot's client ID
 
-// ===== CONFIG =====
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = "1493989281956368538"; // your app ID
-
-// ===== SIMPLE WARNING STORAGE (JSON) =====
-const WARN_FILE = path.join(__dirname, "warnings.json");
-function loadWarnings() {
-    try {
-        if (!fs.existsSync(WARN_FILE)) return {};
-        return JSON.parse(fs.readFileSync(WARN_FILE, "utf8") || "{}");
-    } catch {
-        return {};
-    }
-}
-function saveWarnings(data) {
-    fs.writeFileSync(WARN_FILE, JSON.stringify(data, null, 2));
-}
-const warnings = loadWarnings();
-
-// ===== CLIENT =====
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers,
-    ],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers],
 });
 
 // ===== SLASH COMMANDS =====
 const commands = [
     new SlashCommandBuilder()
-        .setName('ping')
-        .setDescription('Check if bot is alive'),
-
+        .setName('lock')
+        .setDescription('Lock the current channel'),
+    new SlashCommandBuilder()
+        .setName('unlock')
+        .setDescription('Unlock the current channel'),
     new SlashCommandBuilder()
         .setName('timeout')
         .setDescription('Timeout a user')
@@ -63,10 +34,9 @@ const commands = [
         )
         .addStringOption(option =>
             option.setName('duration')
-                .setDescription('Duration (e.g., 10m, 1h)')
+                .setDescription('Timeout duration (e.g., 10m, 1h)')
                 .setRequired(true)
         ),
-
     new SlashCommandBuilder()
         .setName('kick')
         .setDescription('Kick a user from the server')
@@ -77,28 +47,9 @@ const commands = [
         )
         .addStringOption(option =>
             option.setName('reason')
-                .setDescription('Reason for the kick')
+                .setDescription('Reason for kick')
                 .setRequired(false)
         ),
-
-    new SlashCommandBuilder()
-        .setName('purge')
-        .setDescription('Delete messages in this channel')
-        .addIntegerOption(option =>
-            option.setName('amount')
-                .setDescription('Number of messages to delete (1-100)')
-                .setRequired(true)
-                .setMinValue(1)
-                .setMaxValue(100)
-        ),
-
-    new SlashCommandBuilder()
-        .setName('lock')
-        .setDescription('Lock the current channel'),
-
-    new SlashCommandBuilder()
-        .setName('unlock')
-        .setDescription('Unlock the current channel'),
 ];
 
 const commandsJson = commands.map(cmd => cmd.toJSON());
@@ -119,26 +70,10 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
     }
 })();
 
-// ===== READY =====
-client.once("clientReady", () => {
+// ===== READY EVENT =====
+client.once("ready", () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
 });
-
-// ===== HELPERS =====
-function parseDuration(duration) {
-    const match = duration.match(/^(\d+)([smh])$/); // Matches seconds, minutes, hours
-    if (!match) return null;
-
-    const [, value, unit] = match;
-    const number = parseInt(value, 10);
-
-    switch (unit) {
-        case 's': return number * 1000; // Seconds to ms
-        case 'm': return number * 60 * 1000; // Minutes to ms
-        case 'h': return number * 60 * 60 * 1000; // Hours to ms
-        default: return null;
-    }
-}
 
 // ===== HANDLE COMMANDS =====
 client.on("interactionCreate", async (interaction) => {
@@ -146,9 +81,32 @@ client.on("interactionCreate", async (interaction) => {
 
     const { commandName, options, channel, guild } = interaction;
 
-    // PING COMMAND
-    if (commandName === "ping") {
-        return interaction.reply({ content: "🏓 Pong!", ephemeral: true });
+    // LOCK COMMAND
+    if (commandName === "lock") {
+        try {
+            const everyoneRole = guild.roles.everyone; // @everyone role
+            await channel.permissionOverwrites.edit(everyoneRole, {
+                [PermissionsBitField.Flags.SendMessages]: false, // Disable sending messages
+            });
+            return interaction.reply({ content: "🔒 Channel locked successfully." });
+        } catch (error) {
+            console.error(error);
+            return interaction.reply({ content: `❌ Lock failed. ${error.message}`, ephemeral: true });
+        }
+    }
+
+    // UNLOCK COMMAND
+    if (commandName === "unlock") {
+        try {
+            const everyoneRole = guild.roles.everyone; // @everyone role
+            await channel.permissionOverwrites.edit(everyoneRole, {
+                [PermissionsBitField.Flags.SendMessages]: null, // Reset to default permission
+            });
+            return interaction.reply({ content: "🔓 Channel unlocked successfully." });
+        } catch (error) {
+            console.error(error);
+            return interaction.reply({ content: `❌ Unlock failed. ${error.message}`, ephemeral: true });
+        }
     }
 
     // TIMEOUT COMMAND
@@ -157,16 +115,32 @@ client.on("interactionCreate", async (interaction) => {
         const duration = options.getString("duration");
 
         const member = guild.members.cache.get(user.id) || await guild.members.fetch(user.id).catch(() => null);
-        if (!member) return interaction.reply({ content: "❌ User not found.", ephemeral: true });
+        if (!member) return interaction.reply({ content: "❌ User not found!", ephemeral: true });
 
         const ms = parseDuration(duration);
-        if (!ms) return interaction.reply({ content: "❌ Invalid duration format. Use like `10m` or `1h`.", ephemeral: true });
+        if (!ms) return interaction.reply({ content: "❌ Invalid duration format. Use '10m' or '1h'.", ephemeral: true });
+
+        // Permission and hierarchy checks
+        const author = interaction.member; // Command issuer
+        const bot = guild.members.cache.get(client.user.id); // Bot member
+
+        if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+            return interaction.reply({ content: "❌ I need the 'MODERATE_MEMBERS' permission to timeout users.", ephemeral: true });
+        }
+
+        if (member.roles.highest.position >= author.roles.highest.position) {
+            return interaction.reply({ content: "❌ You can't timeout this user (role hierarchy).", ephemeral: true });
+        }
+        if (member.roles.highest.position >= bot.roles.highest.position) {
+            return interaction.reply({ content: "❌ I can't timeout this user (role hierarchy).", ephemeral: true });
+        }
 
         try {
-            await member.timeout(ms, "Timeout via moderation bot");
+            await member.timeout(ms, `Timed out by ${interaction.user.tag}`);
             return interaction.reply({ content: `✅ Timed out **${user.tag}** for ${duration}.` });
         } catch (error) {
-            return interaction.reply({ content: `❌ Timeout failed. ${error.message}`, ephemeral: true });
+            console.error(error);
+            return interaction.reply({ content: `❌ Timeout failed. Check role hierarchy or permissions.`, ephemeral: true });
         }
     }
 
@@ -178,46 +152,46 @@ client.on("interactionCreate", async (interaction) => {
         const member = guild.members.cache.get(user.id) || await guild.members.fetch(user.id).catch(() => null);
         if (!member) return interaction.reply({ content: "❌ User not found.", ephemeral: true });
 
+        // Permission and hierarchy checks
+        const author = interaction.member; // Command issuer
+        const bot = guild.members.cache.get(client.user.id); // Bot member
+
+        if (!guild.members.me.permissions.has(PermissionsBitField.Flags.KickMembers)) {
+            return interaction.reply({ content: "❌ I need the 'KICK_MEMBERS' permission to kick users.", ephemeral: true });
+        }
+
+        if (member.roles.highest.position >= author.roles.highest.position) {
+            return interaction.reply({ content: "❌ You can't kick this user (role hierarchy).", ephemeral: true });
+        }
+        if (member.roles.highest.position >= bot.roles.highest.position) {
+            return interaction.reply({ content: "❌ I can't kick this user (role hierarchy).", ephemeral: true });
+        }
+
         try {
             await member.kick(reason);
-            return interaction.reply({ content: `✅ Kicked **${user.tag}**. Reason: ${reason}` });
+            return interaction.reply({ content: `✅ Kicked **${user.tag}** successfully. Reason: ${reason}` });
         } catch (error) {
+            console.error(error);
             return interaction.reply({ content: `❌ Failed to kick user. ${error.message}`, ephemeral: true });
         }
     }
-
-    // PURGE COMMAND
-    if (commandName === "purge") {
-        const amount = options.getInteger("amount");
-
-        try {
-            const messages = await channel.messages.fetch({ limit: amount });
-            await channel.bulkDelete(messages, true);
-            return interaction.reply({ content: `✅ Deleted **${messages.size}** messages.`, ephemeral: true });
-        } catch (error) {
-            return interaction.reply({ content: `❌ Purge failed. ${error.message}`, ephemeral: true });
-        }
-    }
-
-    // LOCK AND UNLOCK COMMANDS
-    if (commandName === "lock") {
-        try {
-            await channel.permissionOverwrites.edit(guild.roles.everyone, { SEND_MESSAGES: false });
-            return interaction.reply({ content: "🔒 Channel locked." });
-        } catch (error) {
-            return interaction.reply({ content: `❌ Lock failed. ${error.message}`, ephemeral: true });
-        }
-    }
-
-    if (commandName === "unlock") {
-        try {
-            await channel.permissionOverwrites.edit(guild.roles.everyone, { SEND_MESSAGES: true });
-            return interaction.reply({ content: "🔓 Channel unlocked." });
-        } catch (error) {
-            return interaction.reply({ content: `❌ Unlock failed. ${error.message}`, ephemeral: true });
-        }
-    }
 });
+
+// ===== HELPER FUNCTION: Parse Duration =====
+function parseDuration(duration) {
+    const match = duration.match(/^(\d+)([smh])$/);
+    if (!match) return null;
+
+    const [, value, unit] = match;
+    const number = parseInt(value, 10);
+
+    switch (unit) {
+        case 's': return number * 1000; // Seconds to milliseconds
+        case 'm': return number * 60 * 1000; // Minutes to milliseconds
+        case 'h': return number * 60 * 60 * 1000; // Hours to milliseconds
+        default: return null;
+    }
+}
 
 // ===== LOGIN =====
 client.login(TOKEN);
