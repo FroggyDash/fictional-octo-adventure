@@ -12,7 +12,7 @@ const {
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = "1493989281956368538";
-const GUILD_ID = "YOUR_GUILD_ID"; // put your server ID here
+const GUILD_ID = "1493176501099692073"; // put your server ID here
 
 // ===== CLIENT =====
 const client = new Client({
